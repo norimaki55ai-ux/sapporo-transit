@@ -1,0 +1,1085 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>1か所への行き方 | 交通案内</title>
+<!--
+  札幌交通案内 from-here.html（ある場所から1か所へ行くための画面）
+  - index.html（経由地・人数を指定して調べる画面）とは独立した1ファイル。index.html には依存しない
+  - URLパラメータは index.html の mode=guide と互換（origin / originname / olat / olon / gdest。mode はあってもなくてもよい）
+  - 登録地は index.html と同じ localStorage「registeredWaypoints」を共有する（同名のみ上書きでマージ）
+-->
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  background: #f0f4f8; color: #1a1a2e; line-height: 1.6; min-height: 100vh;
+}
+.container { max-width: 600px; margin: 0 auto; padding: 20px; }
+h1 { text-align: center; color: #0066cc; margin-bottom: 8px; font-size: 1.5rem; word-break: break-all; }
+.subtitle { text-align: center; color: #666; font-size: 0.85rem; margin-bottom: 20px; }
+.card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); padding: 20px; margin-bottom: 18px; }
+.card h2 { font-size: 1.15rem; color: #333; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 2px solid #e0e0e0; }
+label { display: block; font-weight: 600; font-size: 0.9rem; margin-bottom: 4px; color: #444; }
+input[type="text"], select {
+  width: 100%; padding: 10px 12px; border: 1.5px solid #ccc; border-radius: 8px;
+  font-size: 1rem; margin-bottom: 10px; font-family: inherit;
+}
+input:focus, select:focus { outline: none; border-color: #0066cc; box-shadow: 0 0 0 3px rgba(0,102,204,0.1); }
+.hint { font-size: 0.85rem; color: #888; margin: 6px 0 10px; }
+
+/* 出発地 */
+.origin-box { font-size: 1rem; padding: 12px 14px; background: #e8f0fe; border-radius: 10px; margin-bottom: 12px; }
+.origin-box .ob-label { font-weight: 700; color: #0066cc; font-size: 1.15rem; word-break: break-all; }
+.origin-box .ob-sub { font-size: 0.8rem; color: #666; word-break: break-all; }
+.origin-box.empty { background: #f5f5f5; color: #777; }
+.geo-btn {
+  display: block; width: 100%; min-height: 52px; padding: 12px; margin-bottom: 12px;
+  font-size: 1.1rem; font-weight: 700; font-family: inherit;
+  background: #0a8f5a; color: #fff; border: 2px solid #0a8f5a; border-radius: 10px; cursor: pointer;
+}
+.geo-btn.secondary { background: #fff; color: #0a8f5a; font-size: 1rem; min-height: 46px; }
+.geo-btn:disabled { opacity: 0.6; cursor: wait; }
+.input-row { display: flex; gap: 8px; align-items: flex-start; }
+.input-row input { flex: 1; margin-bottom: 0; }
+.sub-btn {
+  min-height: 44px; padding: 8px 14px; font-size: 0.95rem; font-weight: 600; font-family: inherit;
+  background: #0066cc; color: #fff; border: none; border-radius: 8px; cursor: pointer; white-space: nowrap;
+}
+.sub-btn:hover { background: #0052a3; }
+.msg-error {
+  color: #b91c1c; background: #fff1f0; border: 1px solid #fecaca; padding: 10px 12px;
+  border-radius: 8px; font-size: 0.9rem; margin-bottom: 10px;
+}
+.msg-warn {
+  color: #92400e; background: #fff7e6; border: 1px solid #fcd9a4; padding: 10px 12px;
+  border-radius: 8px; font-size: 0.85rem; margin: 10px 0;
+}
+
+/* 行き先ボタン */
+.dest-group-label { font-size: 0.8rem; color: #888; margin: 4px 0 6px; }
+.dest-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.dest-btn {
+  min-height: 56px; padding: 10px; font-size: 1.05rem; font-weight: 700; font-family: inherit;
+  border: 2px solid #0066cc; background: #fff; color: #0066cc; border-radius: 12px; cursor: pointer;
+  word-break: break-all; line-height: 1.3;
+}
+.dest-btn.selected { background: #0066cc; color: #fff; }
+
+/* 結果 */
+.result-header { font-size: 0.95rem; color: #333; margin-bottom: 10px; word-break: break-all; font-weight: 600; }
+.mode-card { border: 1px solid #dde; border-radius: 12px; padding: 12px 16px; margin-bottom: 10px; background: #fff; }
+.mc-head { font-weight: 700; font-size: 1.05rem; color: #333; }
+.mc-time { font-size: 1.6rem; font-weight: 800; color: #0066cc; margin: 2px 0; }
+.mc-fare { font-size: 1.05rem; font-weight: 600; color: #333; }
+.mc-note { font-size: 0.78rem; color: #777; margin-top: 4px; line-height: 1.5; }
+.night-badge {
+  display: inline-block; background: #2c3e50; color: #f1c40f; padding: 2px 8px;
+  border-radius: 4px; font-size: 0.75rem; font-weight: 600; margin-left: 4px;
+}
+.gmap-btn {
+  display: block; width: 100%; padding: 14px 16px; margin-top: 6px; border-radius: 10px;
+  background: #4285f4; color: #fff; text-align: center; text-decoration: none; font-weight: 700; font-size: 1.05rem;
+}
+.gmap-btn:hover { opacity: 0.9; }
+.small-btn {
+  margin-top: 10px; padding: 8px 12px; min-height: 40px; background: #fff; color: #0066cc;
+  border: 1px solid #0066cc; border-radius: 8px; font-size: 0.85rem; cursor: pointer; font-family: inherit;
+}
+.loading { text-align: center; padding: 20px; color: #666; }
+.loading::after {
+  content: ''; display: inline-block; width: 20px; height: 20px; border: 3px solid #ccc;
+  border-top-color: #0066cc; border-radius: 50%; animation: spin 0.8s linear infinite;
+  margin-left: 8px; vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.detail-link { display: block; text-align: center; margin: 4px 0 20px; color: #0066cc; font-size: 0.95rem; padding: 10px; }
+
+/* 案内用QRの作成（折りたたみ） */
+details.qr-maker { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 30px; }
+details.qr-maker > summary { padding: 16px 20px; font-weight: 700; font-size: 1.05rem; cursor: pointer; color: #333; min-height: 44px; }
+.qr-maker-body { padding: 0 20px 20px; }
+.gm-dest-list { max-height: 260px; overflow-y: auto; border: 1px solid #ddd; border-radius: 8px; padding: 6px 10px; margin-bottom: 10px; background: #fafafa; }
+.gm-dest-item { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-weight: normal; cursor: pointer; border-bottom: 1px solid #eee; margin: 0; }
+.gm-dest-item:last-child { border-bottom: none; }
+.gm-dest-item input { width: 20px; height: 20px; flex-shrink: 0; }
+.gm-dest-addr { font-size: 0.78rem; color: #999; margin-left: 4px; word-break: break-all; }
+.gm-add-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.gm-add-row input { flex: 1 1 140px; margin-bottom: 0; }
+.btn-main {
+  display: block; width: 100%; padding: 14px; background: #0066cc; color: #fff; border: none;
+  border-radius: 10px; font-size: 1.05rem; font-weight: 700; cursor: pointer; font-family: inherit;
+}
+.btn-main:disabled { background: #aaa; cursor: not-allowed; }
+.gm-geo-report { border: 1px solid #ddd; border-radius: 8px; padding: 10px 12px; margin: 10px 0; background: #fafafa; font-size: 0.82rem; }
+.gm-geo-title { font-weight: 700; color: #444; margin-bottom: 6px; }
+.gm-geo-row { padding: 6px 0; border-bottom: 1px solid #eee; word-break: break-all; }
+.gm-geo-row:last-child { border-bottom: none; }
+.gm-geo-head { font-weight: 600; color: #333; }
+.gm-geo-body { color: #2f6b3a; }
+.gm-geo-out { color: #c0392b; font-weight: 700; }
+.gm-geo-fail { color: #b45309; font-weight: 600; }
+.url-row { display: flex; gap: 8px; margin: 12px 0 6px; }
+.url-row input { flex: 1; margin-bottom: 0; font-size: 0.8rem; background: #f9f9f9; }
+.copy-msg { font-size: 0.82rem; color: #0066cc; margin-bottom: 8px; }
+.qr-print-sheet { text-align: center; margin: 12px 0; padding: 14px; border: 1px dashed #ccc; border-radius: 10px; }
+.qr-print-title { font-size: 1.15rem; font-weight: 700; margin-bottom: 8px; word-break: break-all; }
+.qr-print-text { font-size: 0.85rem; color: #555; margin-top: 8px; }
+.qr-box { display: inline-block; background: #fff; padding: 6px; border: 1px solid #ddd; border-radius: 8px; line-height: 0; }
+.qr-box svg { width: 200px; height: 200px; display: block; }
+.qr-box.qr-error { line-height: 1.5; padding: 12px; font-size: 0.85rem; color: #b45309; max-width: 320px; }
+.gm-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.gm-actions > * { flex: 1 1 140px; min-height: 44px; text-align: center; }
+.gm-preview-link {
+  display: inline-flex; align-items: center; justify-content: center; padding: 8px 14px; border: 1px solid #0066cc;
+  border-radius: 8px; color: #0066cc; text-decoration: none; font-size: 0.9rem;
+}
+#printSheet { display: none; }
+
+@media (max-width: 480px) {
+  .container { padding: 12px; }
+  h1 { font-size: 1.3rem; }
+  .card { padding: 16px; border-radius: 10px; margin-bottom: 14px; }
+  /* iOSで入力時に自動ズームしないよう16px以上を確保 */
+  input[type="text"], select { font-size: 16px; min-height: 44px; }
+  .dest-grid { grid-template-columns: 1fr 1fr; }
+  .mc-time { font-size: 1.4rem; }
+  details.qr-maker > summary { padding: 14px 16px; }
+  .qr-maker-body { padding: 0 16px 16px; }
+}
+
+/* 印刷: 案内用QRだけを出力 */
+@media print {
+  body.print-guide-qr { background: #fff; }
+  body.print-guide-qr > *:not(#printSheet) { display: none !important; }
+  body.print-guide-qr #printSheet { display: block; text-align: center; padding-top: 30mm; color: #000; }
+  #printSheet .qr-print-title { font-size: 22pt; margin-bottom: 10mm; }
+  #printSheet .qr-box { border: none; }
+  #printSheet .qr-box svg { width: 80mm; height: 80mm; }
+  #printSheet .qr-print-text { font-size: 13pt; color: #000; margin-top: 8mm; }
+}
+</style>
+<!-- QRコードをブラウザ内で生成（URLを外部サービスへ送信しない）。cdnjs / qrcode-generator 1.4.4 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js" integrity="sha512-ZDSPMa/JM1D+7kdg2x3BsruQ6T/JpJo3jWDWkCZsP+5yVyp1KfESqLI+7RqB5k24F7p2cV7i2YHh/890y6P6Sw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+</head>
+<body>
+<div class="container" id="fromHereView">
+  <h1 id="pageTitle">1か所への行き方</h1>
+  <p class="subtitle">出発地と行き先を選ぶと、時間と料金の目安を表示します（大人1人の場合）</p>
+
+  <div class="card">
+    <h2>① どこから？</h2>
+    <div id="originDisplay" class="origin-box empty">出発地が未設定です</div>
+    <button id="geoBtn" class="geo-btn" type="button" onclick="useCurrentLocation()">📍 現在地を使う</button>
+    <div id="geoMsg" class="msg-error" style="display:none;"></div>
+    <label for="originInput">住所・駅名から出発する</label>
+    <div class="input-row">
+      <input type="text" id="originInput" placeholder="例: 札幌駅" autocomplete="off">
+      <button class="sub-btn" type="button" onclick="setManualOrigin()">ここから</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>② どこへ？</h2>
+    <div id="destButtons"></div>
+    <label for="destInput">住所・駅名を入力する</label>
+    <div class="input-row">
+      <input type="text" id="destInput" placeholder="例: 大通公園" autocomplete="off">
+      <button class="sub-btn" type="button" onclick="setManualDest()">ここへ行く</button>
+    </div>
+  </div>
+
+  <div id="results" class="card" style="display:none;">
+    <h2>③ 行き方と料金の目安</h2>
+    <div id="resultHeader" class="result-header"></div>
+    <div id="resultLoading" class="loading" style="display:none;">計算中</div>
+    <div id="resultError" class="msg-error" style="display:none;"></div>
+    <div id="areaWarn" class="msg-error" style="display:none;"></div>
+    <div id="resultCards"></div>
+    <a id="gmapTransitBtn" class="gmap-btn" href="#" target="_blank" rel="noopener" style="display:none;">Google マップで乗換を見る</a>
+    <button id="registerDestBtn" class="small-btn" type="button" style="display:none;" onclick="registerCurrentDest()">＋ この行き先を登録</button>
+    <div id="registerMsg" class="copy-msg" style="display:none;"></div>
+  </div>
+
+  <a id="detailLink" class="detail-link" href="index.html">経由地・人数を指定して調べる →</a>
+
+  <details class="qr-maker" id="qrMaker">
+    <summary>📱 案内用QRを作る</summary>
+    <div class="qr-maker-body">
+      <p class="hint">掲示物などに貼るQRコードを作ります。読み取った人のスマホに、その場所からの行き方と料金の目安がこの画面で表示されます。</p>
+
+      <label for="gmOriginSelect">出発地（QRを貼る場所）</label>
+      <select id="gmOriginSelect" onchange="gmApplyOriginSelect(this)">
+        <option value="">登録地から選ぶ...</option>
+      </select>
+      <input type="text" id="gmOriginAddr" placeholder="住所・駅名（例: 札幌駅）" autocomplete="off">
+      <input type="text" id="gmOriginName" placeholder="表示名（例: 札幌駅 北口）" autocomplete="off">
+
+      <label>行き先の候補（チェックしたものがQRに入ります）</label>
+      <div id="gmDestList" class="gm-dest-list"></div>
+      <div class="gm-add-row">
+        <input type="text" id="gmAddAddr" placeholder="住所・駅名（例: 大通公園）" autocomplete="off">
+        <input type="text" id="gmAddName" placeholder="表示名（省略可）" autocomplete="off">
+        <button class="sub-btn" type="button" onclick="gmAddDest()">候補に追加</button>
+      </div>
+
+      <button class="btn-main" id="gmGenerateBtn" type="button" onclick="gmGenerate()">案内用QRを作成</button>
+      <div id="gmWarn" class="msg-warn" style="display:none;"></div>
+      <div id="gmGeoReport" class="gm-geo-report" style="display:none;"></div>
+
+      <div id="gmOutput" style="display:none;">
+        <div class="url-row">
+          <input type="text" id="gmUrl" readonly>
+          <button class="sub-btn" type="button" onclick="gmCopyUrl()">コピー</button>
+        </div>
+        <div id="gmCopyMsg" class="copy-msg" style="display:none;">コピーしました！</div>
+        <div id="guideQrPrint" class="qr-print-sheet">
+          <div id="gmPrintTitle" class="qr-print-title"></div>
+          <div id="gmQr" class="qr-box" role="img" aria-label="案内用QRコード"></div>
+          <p class="qr-print-text">スマートフォンのカメラで読み取ると、ここからの行き方と料金の目安を表示します</p>
+        </div>
+        <div class="gm-actions">
+          <button class="sub-btn" type="button" onclick="gmPrint()">🖨 印刷する</button>
+          <a id="gmPreviewLink" class="gm-preview-link" href="#" target="_blank" rel="noopener">案内画面をプレビュー</a>
+        </div>
+      </div>
+    </div>
+  </details>
+</div>
+
+<!-- 印刷時のみ使う領域（案内用QRの印刷でここに複製して出力） -->
+<div id="printSheet"></div>
+
+<script>
+// ==========================================
+// 定数・状態
+// ==========================================
+var WALK_KMH = 4.8;        // 徒歩: 分速80m
+var BUS_KMH = 25;          // バス・地下鉄の乗車時間の目安
+var BUS_FARE_ADULT = 210;  // 札幌市内バス均一料金（大人）を最安目安として使う
+var REG_NAME_MAX = 50;
+var REG_ADDR_MAX = 200;
+var GDEST_MAX = 30;
+var GUIDE_URL_WARN_LENGTH = 2000;
+var SAPPORO_AREA = { latMin: 42.7, latMax: 43.3, lonMin: 140.9, lonMax: 141.7 };
+
+var state = {
+  origin: null,   // { label, address, lat, lon, source: 'param'|'geo'|'manual', accuracy }
+  dest: null,     // { name, address, lat, lon, manual }
+  urlDests: [],   // URLの gdest 由来の行き先（座標付きのことが多い）
+  choices: [],    // 画面に並べている行き先ボタン（urlDests ＋ 端末の登録地）
+  route: null,
+  reqId: 0
+};
+var gmExtraDests = [];  // QR作成画面で手入力追加した行き先 [{name, address}]
+
+// ==========================================
+// 共通ユーティリティ（index.html と同じ実装）
+// ==========================================
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function encodeB64Json(obj) {
+  return btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
+}
+function decodeB64Json(str) {
+  return JSON.parse(decodeURIComponent(escape(atob(str))));
+}
+function isSafeRegKey(k) {
+  return typeof k === 'string' && k.trim() !== '' && k.length <= REG_NAME_MAX &&
+    k !== '__proto__' && k !== 'constructor' && k !== 'prototype';
+}
+function sanitizeRegObject(obj) {
+  var out = {};
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return out;
+  Object.keys(obj).forEach(function(k) {
+    var v = obj[k];
+    if (isSafeRegKey(k) && typeof v === 'string' && v.trim() !== '' && v.length <= REG_ADDR_MAX) {
+      out[k.trim()] = v.trim();
+    }
+  });
+  return out;
+}
+function parseCoord(v, min, max) {
+  if ((typeof v !== 'number' && typeof v !== 'string') || v === '') return null;
+  var n = parseFloat(v);
+  return (isFinite(n) && n >= min && n <= max) ? n : null;
+}
+function isInSapporoArea(lat, lon) {
+  return isFinite(lat) && isFinite(lon) &&
+    lat >= SAPPORO_AREA.latMin && lat <= SAPPORO_AREA.latMax &&
+    lon >= SAPPORO_AREA.lonMin && lon <= SAPPORO_AREA.lonMax;
+}
+function hasCoords(pt) {
+  return pt && pt.lat !== null && pt.lat !== undefined && pt.lon !== null && pt.lon !== undefined;
+}
+function formatFare(n) { return n.toLocaleString('ja-JP'); }
+function isNightTime(date) { var h = date.getHours(); return h >= 22 || h < 5; }
+function calcTaxiFare(distanceMeters, isNight) {
+  // 札幌市タクシー料金（普通車）: 初乗り680円/1.3km、以降80円/307m。深夜2割増
+  var fare = 680;
+  if (distanceMeters > 1300) fare += Math.ceil((distanceMeters - 1300) / 307) * 80;
+  if (isNight) fare = Math.ceil(fare * 1.2);
+  return fare;
+}
+// アプリ自身のURL（クエリなし）。file:// では location.origin が "null" になるため href から作る
+function getAppBaseUrl() {
+  if (location.protocol === 'file:') return location.href.split(/[?#]/)[0];
+  return location.origin + location.pathname;
+}
+function showEl(id, on) { document.getElementById(id).style.display = on ? 'block' : 'none'; }
+
+// ==========================================
+// 登録地（index.html と localStorage を共有）
+// ==========================================
+function loadRegisteredAddresses() {
+  try {
+    var stored = localStorage.getItem('registeredWaypoints');
+    var data = stored ? JSON.parse(stored) : {};
+    return (data && typeof data === 'object' && !Array.isArray(data)) ? sanitizeRegObject(data) : {};
+  } catch (e) {
+    console.error('登録データの読み込みに失敗:', e);
+    return {};
+  }
+}
+// 既存の登録地を残したままマージ（同名キーのみ上書き）
+function mergeRegisteredAddresses(incoming) {
+  var keys = Object.keys(incoming || {});
+  if (keys.length === 0) return;
+  try {
+    var stored = localStorage.getItem('registeredWaypoints');
+    var current = stored ? JSON.parse(stored) : {};
+    if (!current || typeof current !== 'object' || Array.isArray(current)) current = {};
+    keys.forEach(function(k) { current[k] = incoming[k]; });
+    localStorage.setItem('registeredWaypoints', JSON.stringify(current));
+  } catch (e) {
+    console.error('登録データの保存に失敗:', e);
+  }
+}
+
+// ==========================================
+// ジオコーディング・経路（GSI → Nominatim フォールバック / OSRM）
+// ==========================================
+async function geocodeGSI(query) {
+  var url = 'https://msearch.gsi.go.jp/address-search/AddressSearch?q=' + encodeURIComponent(query);
+  var res = await fetch(url);
+  if (!res.ok) return null;
+  var data = await res.json();
+  if (!data || data.length === 0) return null;
+  var coords = data[0].geometry.coordinates; // [lon, lat]
+  return { lat: coords[1], lon: coords[0], name: data[0].properties.title };
+}
+async function geocodeNominatim(query) {
+  var url = 'https://nominatim.openstreetmap.org/search?format=json&q=' +
+    encodeURIComponent(query) + '&limit=1&countrycodes=jp';
+  var res = await fetch(url, {
+    headers: { 'User-Agent': 'SapporoTransitGuide/1.0 (personal-use; non-commercial)' }
+  });
+  if (!res.ok) return null;
+  var data = await res.json();
+  if (!data || data.length === 0) return null;
+  return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon), name: data[0].display_name };
+}
+// 1地点を変換（GSI → 失敗時のみNominatim）。失敗時は null。
+// Nominatimの利用規約（1秒1件）に合わせ、Nominatimへ問い合わせる前は必ず1.1秒空ける（呼び出しは順次）
+async function gmGeocodeOne(address) {
+  try {
+    var r = await geocodeGSI(address);
+    if (r) { r.source = 'gsi'; return r; }
+  } catch (e) { /* フォールバックへ */ }
+  try {
+    await new Promise(function(res) { setTimeout(res, 1100); });
+    var n = await geocodeNominatim(address);
+    if (n) { n.source = 'nominatim'; return n; }
+  } catch (e) { /* 失敗扱い */ }
+  return null;
+}
+async function geocode(place) {
+  var r = await gmGeocodeOne(place);
+  if (r) return r;
+  throw new Error('「' + place + '」の場所が見つかりませんでした。市区町村から入力してみてください（例: 札幌市中央区…）。');
+}
+async function ensureCoords(pt) {
+  if (hasCoords(pt)) return pt;
+  var g = await geocode(pt.address);
+  pt.lat = g.lat;
+  pt.lon = g.lon;
+  return pt;
+}
+async function getRoute(a, b) {
+  var url = 'https://router.project-osrm.org/route/v1/driving/' +
+    a.lon + ',' + a.lat + ';' + b.lon + ',' + b.lat + '?overview=false';
+  var res = await fetch(url);
+  if (!res.ok) throw new Error('経路検索に失敗しました（HTTPエラー: ' + res.status + '）');
+  var data = await res.json();
+  if (data.code !== 'Ok' || !data.routes || data.routes.length === 0) {
+    throw new Error('経路が見つかりませんでした。場所を確認してください。');
+  }
+  return { distanceMeters: data.routes[0].distance, durationSeconds: data.routes[0].duration };
+}
+
+// ==========================================
+// URLパラメータ（index.html の mode=guide と互換）
+// ==========================================
+// gdest: Base64(JSON配列)
+//   新形式: [[表示名, 住所, lat, lon], ...] / 旧形式: [[表示名, 住所], ...]
+function parseGuideDests(raw) {
+  if (!raw) return [];
+  try {
+    var arr = decodeB64Json(raw);
+    if (!Array.isArray(arr)) return [];
+    var out = [];
+    arr.forEach(function(pair) {
+      if (!Array.isArray(pair)) return;
+      var n = pair[0], a = pair[1];
+      if (isSafeRegKey(n) && typeof a === 'string' && a.trim() !== '' && a.length <= REG_ADDR_MAX) {
+        var lat = parseCoord(pair.length > 2 ? pair[2] : null, -90, 90);
+        var lon = parseCoord(pair.length > 3 ? pair[3] : null, -180, 180);
+        var ok = lat !== null && lon !== null;
+        out.push({ name: n.trim(), address: a.trim(), lat: ok ? lat : null, lon: ok ? lon : null });
+      }
+    });
+    return out.slice(0, GDEST_MAX);
+  } catch (e) {
+    console.error('案内用の行き先データの読み込みに失敗:', e);
+    return [];
+  }
+}
+
+function initFromUrl() {
+  var p = new URLSearchParams(location.search);
+  var dests = parseGuideDests(p.get('gdest'));
+  if (dests.length > 0) {
+    var regObj = {};
+    dests.forEach(function(d) { regObj[d.name] = d.address; });
+    mergeRegisteredAddresses(regObj);
+  }
+  state.urlDests = dests;
+
+  var origin = (p.get('origin') || '').trim().substring(0, REG_ADDR_MAX);
+  var originName = (p.get('originname') || '').trim().substring(0, REG_NAME_MAX);
+  var olat = parseCoord(p.get('olat'), -90, 90);
+  var olon = parseCoord(p.get('olon'), -180, 180);
+  var ok = olat !== null && olon !== null;
+
+  if (originName) {
+    document.getElementById('pageTitle').textContent = originName + ' からの行き方';
+    document.title = originName + ' からの行き方 | 交通案内';
+  }
+  if (origin || ok) {
+    state.origin = {
+      label: originName || origin || '出発地',
+      address: origin,
+      lat: ok ? olat : null,
+      lon: ok ? olon : null,
+      source: 'param'
+    };
+  }
+}
+
+// ==========================================
+// ① 出発地
+// ==========================================
+function renderOrigin() {
+  var box = document.getElementById('originDisplay');
+  var geoBtn = document.getElementById('geoBtn');
+  var o = state.origin;
+  box.innerHTML = '';
+  if (!o) {
+    box.className = 'origin-box empty';
+    box.textContent = '出発地が未設定です。「現在地を使う」を押すか、住所・駅名を入力してください。';
+    geoBtn.className = 'geo-btn';
+    geoBtn.textContent = '📍 現在地を使う';
+    return;
+  }
+  box.className = 'origin-box';
+  var label = document.createElement('div');
+  label.className = 'ob-label';
+  label.textContent = o.label;
+  box.appendChild(label);
+  var sub = document.createElement('div');
+  sub.className = 'ob-sub';
+  if (o.source === 'geo') {
+    sub.textContent = 'スマホの位置情報' + (o.accuracy ? '（誤差 約' + Math.round(o.accuracy) + 'm）' : '');
+  } else if (o.address && o.address !== o.label) {
+    sub.textContent = o.address;
+  }
+  if (sub.textContent) box.appendChild(sub);
+  geoBtn.className = 'geo-btn secondary';
+  geoBtn.textContent = o.source === 'geo' ? '📍 現在地を取り直す' : '📍 現在地を使う';
+}
+
+function setOrigin(o) {
+  state.origin = o;
+  state.route = null;
+  renderOrigin();
+  updateDetailLink();
+  if (state.dest) compute();
+}
+
+function setManualOrigin() {
+  var v = document.getElementById('originInput').value.trim().substring(0, REG_ADDR_MAX);
+  if (!v) { alert('出発地の住所・駅名を入力してください。'); return; }
+  showEl('geoMsg', false);
+  setOrigin({ label: v, address: v, lat: null, lon: null, source: 'manual' });
+}
+
+// 位置情報の取得失敗 → メッセージを出して住所入力欄へ誘導
+function geoError(message) {
+  var m = document.getElementById('geoMsg');
+  m.textContent = message;
+  m.style.display = 'block';
+  document.getElementById('originInput').focus();
+}
+
+function useCurrentLocation() {
+  var btn = document.getElementById('geoBtn');
+  showEl('geoMsg', false);
+  if (!('geolocation' in navigator)) {
+    geoError('この端末・ブラウザでは現在地を取得できません。出発地の住所・駅名を入力してください。');
+    return;
+  }
+  if (window.isSecureContext === false) {
+    geoError('現在地の取得には https:// で開かれたページが必要です。出発地の住所・駅名を入力してください。');
+    return;
+  }
+  var prevText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '📍 現在地を取得中...';
+  navigator.geolocation.getCurrentPosition(function(pos) {
+    btn.disabled = false;
+    setOrigin({
+      label: '現在地', address: '',
+      lat: pos.coords.latitude, lon: pos.coords.longitude,
+      source: 'geo', accuracy: pos.coords.accuracy
+    });
+  }, function(err) {
+    btn.disabled = false;
+    btn.textContent = prevText;
+    var msg;
+    if (err && err.code === 1) {
+      msg = '位置情報の利用が許可されませんでした。ブラウザや端末の設定で位置情報を許可するか、出発地の住所・駅名を入力してください。';
+    } else if (err && err.code === 3) {
+      msg = '現在地の取得に時間がかかりすぎました。電波の良い場所でもう一度試すか、出発地の住所・駅名を入力してください。';
+    } else {
+      msg = '現在地を取得できませんでした。出発地の住所・駅名を入力してください。';
+    }
+    geoError(msg);
+  }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 });
+}
+
+// ==========================================
+// ② 行き先
+// ==========================================
+function renderDestButtons() {
+  var wrap = document.getElementById('destButtons');
+  wrap.innerHTML = '';
+  var registered = loadRegisteredAddresses();
+  var urlNames = {};
+  state.urlDests.forEach(function(d) { urlNames[d.name] = true; });
+  var regChoices = Object.keys(registered).filter(function(n) { return !urlNames[n]; })
+    .map(function(n) { return { name: n, address: registered[n], lat: null, lon: null }; });
+  state.choices = state.urlDests.concat(regChoices);
+
+  if (state.choices.length === 0) {
+    var hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.textContent = '行き先の住所・駅名を下の欄に入力してください。';
+    wrap.appendChild(hint);
+    return;
+  }
+  var addGroup = function(title, from, to) {
+    if (to <= from) return;
+    if (title) {
+      var lab = document.createElement('div');
+      lab.className = 'dest-group-label';
+      lab.textContent = title;
+      wrap.appendChild(lab);
+    }
+    var grid = document.createElement('div');
+    grid.className = 'dest-grid';
+    for (var i = from; i < to; i++) {
+      (function(idx) {
+        var d = state.choices[idx];
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'dest-btn';
+        b.textContent = d.name;
+        b.title = d.address;
+        b.setAttribute('data-index', String(idx));
+        b.addEventListener('click', function() { selectDest(idx); });
+        grid.appendChild(b);
+      })(i);
+    }
+    wrap.appendChild(grid);
+  };
+  var n = state.urlDests.length;
+  addGroup(n > 0 && regChoices.length > 0 ? 'おすすめの行き先' : '', 0, n);
+  addGroup(n > 0 ? 'この端末に登録した場所' : '', n, state.choices.length);
+}
+
+function markSelectedDest(index) {
+  document.querySelectorAll('.dest-btn').forEach(function(b) {
+    b.classList.toggle('selected', b.getAttribute('data-index') === String(index));
+  });
+}
+
+function selectDest(index) {
+  var d = state.choices[index];
+  if (!d) return;
+  // QRに座標が埋め込まれていれば住所検索をせずにそのまま使う
+  state.dest = { name: d.name, address: d.address, lat: d.lat, lon: d.lon, manual: false };
+  markSelectedDest(index);
+  updateDetailLink();
+  compute();
+}
+
+function setManualDest() {
+  var v = document.getElementById('destInput').value.trim().substring(0, REG_ADDR_MAX);
+  if (!v) { alert('行き先の住所・駅名を入力してください。'); return; }
+  state.dest = { name: v, address: v, lat: null, lon: null, manual: true };
+  markSelectedDest(-1);
+  updateDetailLink();
+  compute();
+}
+
+function registerCurrentDest() {
+  var d = state.dest;
+  if (!d || !d.address) return;
+  var name = window.prompt('登録する名前（例: 大通公園）', d.name.substring(0, REG_NAME_MAX));
+  if (name === null) return;
+  var obj = {};
+  obj[name.trim()] = d.address;
+  var safe = sanitizeRegObject(obj);
+  if (Object.keys(safe).length === 0) {
+    alert('名前は1〜' + REG_NAME_MAX + '文字で入力してください。');
+    return;
+  }
+  mergeRegisteredAddresses(safe);
+  var msg = document.getElementById('registerMsg');
+  msg.textContent = '「' + Object.keys(safe)[0] + '」を登録しました（行き先ボタンに追加されます）';
+  msg.style.display = 'block';
+  showEl('registerDestBtn', false);
+  renderDestButtons();
+  gmRefreshRegistered();
+}
+
+// ==========================================
+// ③ 計算と結果表示（大人1人で固定）
+// ==========================================
+function pointForLink(pt) {
+  return hasCoords(pt) ? (pt.lat + ',' + pt.lon) : pt.address;
+}
+function gmapUrl(travelmode) {
+  return 'https://www.google.com/maps/dir/?api=1' +
+    '&origin=' + encodeURIComponent(pointForLink(state.origin)) +
+    '&destination=' + encodeURIComponent(pointForLink(state.dest)) +
+    '&travelmode=' + travelmode;
+}
+
+async function compute() {
+  var errorEl = document.getElementById('resultError');
+  var areaWarn = document.getElementById('areaWarn');
+  var header = document.getElementById('resultHeader');
+  showEl('results', true);
+  document.getElementById('resultCards').innerHTML = '';
+  showEl('resultError', false);
+  showEl('areaWarn', false);
+  showEl('gmapTransitBtn', false);
+  showEl('registerDestBtn', false);
+  showEl('registerMsg', false);
+
+  if (!state.origin) {
+    header.textContent = '';
+    errorEl.textContent = '先に「① どこから？」を設定してください（現在地を使う、または住所を入力）。';
+    showEl('resultError', true);
+    document.getElementById('originDisplay').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+  if (!state.dest) return;
+
+  var origin = state.origin;
+  var dest = state.dest;
+  header.textContent = origin.label + ' → ' + dest.name;
+  showEl('resultLoading', true);
+  document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  var myReq = ++state.reqId;
+  try {
+    await ensureCoords(origin);
+    await ensureCoords(dest);
+    var route = await getRoute(origin, dest);
+    if (myReq !== state.reqId) return;  // より新しい操作があれば破棄
+    state.route = route;
+    showEl('resultLoading', false);
+    // 住所検索の誤変換対策: 出発地（現在地は対象外）・行き先が札幌圏外なら注意を出す
+    var outNames = [];
+    if (origin.source !== 'geo' && !isInSapporoArea(origin.lat, origin.lon)) outNames.push(origin.label);
+    if (!isInSapporoArea(dest.lat, dest.lon)) outNames.push(dest.name);
+    if (outNames.length > 0) {
+      areaWarn.textContent = '⚠ 「' + outNames.join('」「') + '」は札幌圏外の場所として検索されました。場所が正しく見つからなかった可能性があります。市区町村から入力し直す（例: 札幌市中央区…）か、Google マップでご確認ください。';
+      showEl('areaWarn', true);
+    }
+    renderCards();
+  } catch (e) {
+    if (myReq !== state.reqId) return;
+    showEl('resultLoading', false);
+    errorEl.textContent = 'エラー: ' + e.message;
+    showEl('resultError', true);
+  }
+}
+
+function renderCards() {
+  var route = state.route;
+  if (!route) return;
+  var km = route.distanceMeters / 1000;
+  var kmText = km.toFixed(1);
+  var night = isNightTime(new Date());
+  var walkMin = Math.round((km / WALK_KMH) * 60);
+  var busMin = Math.round((km / BUS_KMH) * 60);
+  var carMin = Math.round(route.durationSeconds / 60);
+  var taxiFare = calcTaxiFare(route.distanceMeters, night);
+  // 表示する値はすべて数値か固定文言（外部入力は含めない）
+  var html = '';
+  html += '<div class="mode-card"><div class="mc-head">🚶 徒歩</div>';
+  html += '<div class="mc-time">約 ' + walkMin + ' 分</div><div class="mc-fare">0 円</div>';
+  html += '<div class="mc-note">距離 約 ' + kmText + ' km（分速80mで計算）';
+  if (km > 3) html += '<br>徒歩では遠い距離です。他の手段もご検討ください。';
+  html += '</div></div>';
+
+  html += '<div class="mode-card"><div class="mc-head">🚌 バス・地下鉄（目安）</div>';
+  html += '<div class="mc-time">約 ' + busMin + ' 分〜</div><div class="mc-fare">' + BUS_FARE_ADULT + ' 円〜</div>';
+  html += '<div class="mc-note">乗っている時間だけの目安です（待ち時間・乗り換え・歩く時間は含みません）。運賃はバスの市内均一料金を基準にした最安の目安です。正確な経路と運賃は下の「Google マップで乗換を見る」で確認してください。</div></div>';
+
+  html += '<div class="mode-card"><div class="mc-head">🚕 タクシー</div>';
+  html += '<div class="mc-time">約 ' + carMin + ' 分</div>';
+  html += '<div class="mc-fare">&yen; ' + formatFare(taxiFare) + (night ? ' <span class="night-badge">深夜割増 2割増</span>' : '') + '</div>';
+  html += '<div class="mc-note">走行距離 約 ' + kmText + ' km。札幌市タクシー料金（普通車）初乗り680円/1.3km、以降80円/307mで計算。深夜（22:00〜5:00）は2割増。実際の料金は道路状況で変わります。</div></div>';
+
+  html += '<div class="mode-card"><div class="mc-head">🚗 自家用車</div>';
+  html += '<div class="mc-time">約 ' + carMin + ' 分</div>';
+  html += '<div class="mc-note">走行距離 約 ' + kmText + ' km。渋滞・駐車場は含みません。</div></div>';
+
+  document.getElementById('resultCards').innerHTML = html;
+  var gbtn = document.getElementById('gmapTransitBtn');
+  gbtn.href = gmapUrl('transit');
+  showEl('gmapTransitBtn', true);
+  // 手入力した行き先は「登録」できるようにする（登録地にない場合のみ）
+  var reg = loadRegisteredAddresses();
+  var already = Object.keys(reg).some(function(k) { return reg[k] === state.dest.address; });
+  showEl('registerDestBtn', !!state.dest.manual && !already);
+}
+
+// 経由地・人数を指定して調べる画面（index.html）へのリンク。住所が分かっている場合は from/to と via0/via1 で引き継ぐ
+// （現在地は座標しかないため引き継がない）
+function updateDetailLink() {
+  var a = document.getElementById('detailLink');
+  var o = state.origin, d = state.dest;
+  var oAddr = o && o.address ? o.address : '';
+  var dAddr = d && d.address ? d.address : '';
+  if (oAddr && dAddr) {
+    var p = new URLSearchParams();
+    p.set('from', oAddr);
+    p.set('to', dAddr);
+    p.set('via0', oAddr);
+    p.set('via1', dAddr);
+    p.set('via0_transport', 'taxi');
+    p.set('adults', '1');
+    p.set('children', '0');
+    a.href = 'index.html?' + p.toString();
+  } else {
+    a.href = 'index.html';
+  }
+}
+
+// ==========================================
+// QRコード（ブラウザ内生成 / qrcode-generator）
+// ==========================================
+function renderQrInto(container, text) {
+  container.innerHTML = '';
+  container.classList.remove('qr-error');
+  if (typeof qrcode !== 'function') {
+    container.classList.add('qr-error');
+    container.textContent = 'QRコード生成ライブラリを読み込めませんでした（オフライン等）。URLをコピーしてご利用ください。';
+    return false;
+  }
+  if (qrcode.stringToBytesFuncs && qrcode.stringToBytesFuncs['UTF-8']) {
+    qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8'];
+  }
+  var levels = ['M', 'L'];  // 長いURLはLでないと収まらない場合がある
+  for (var i = 0; i < levels.length; i++) {
+    try {
+      var qr = qrcode(0, levels[i]);
+      qr.addData(text, 'Byte');
+      qr.make();
+      container.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 4, scalable: true });
+      return true;
+    } catch (e) { /* 容量超過時は次のレベルへ */ }
+  }
+  container.classList.add('qr-error');
+  container.textContent = 'URLが長すぎてQRコードにできません。行き先の数を減らしてください。';
+  return false;
+}
+
+// ==========================================
+// 案内用QRの作成（作る側）
+// ==========================================
+function gmRefreshRegistered() {
+  var registered = loadRegisteredAddresses();
+  var nicks = Object.keys(registered);
+
+  var sel = document.getElementById('gmOriginSelect');
+  sel.innerHTML = '';
+  var first = document.createElement('option');
+  first.value = '';
+  first.textContent = nicks.length ? '登録地から選ぶ...' : '登録地はありません';
+  sel.appendChild(first);
+  nicks.forEach(function(nick) {
+    var o = document.createElement('option');
+    o.value = nick;
+    o.textContent = nick;
+    sel.appendChild(o);
+  });
+
+  // 行き先候補（登録地＋手入力追加分）。既存のチェック状態を保持する
+  var list = document.getElementById('gmDestList');
+  var checked = {};
+  list.querySelectorAll('input[type="checkbox"]').forEach(function(cb) { checked[cb.value] = cb.checked; });
+  list.innerHTML = '';
+  var items = nicks.map(function(n) { return { key: 'r:' + n, name: n, address: registered[n], extra: false }; })
+    .concat(gmExtraDests.map(function(d, i) { return { key: 'x:' + i, name: d.name, address: d.address, extra: true }; }));
+  if (items.length === 0) {
+    var p = document.createElement('p');
+    p.className = 'hint';
+    p.textContent = '登録地がありません。下の欄から行き先を追加してください。';
+    list.appendChild(p);
+    return;
+  }
+  items.forEach(function(it) {
+    var label = document.createElement('label');
+    label.className = 'gm-dest-item';
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = it.key;
+    cb.checked = it.key in checked ? !!checked[it.key] : it.extra;  // 手入力分は最初からチェック
+    var name = document.createElement('span');
+    name.textContent = it.name + (it.extra ? '（追加）' : '');
+    var addr = document.createElement('span');
+    addr.className = 'gm-dest-addr';
+    addr.textContent = String(it.address || '').substring(0, 40);
+    label.appendChild(cb);
+    label.appendChild(name);
+    label.appendChild(addr);
+    list.appendChild(label);
+  });
+}
+
+function gmApplyOriginSelect(sel) {
+  var nick = sel.value;
+  if (!nick) return;
+  var registered = loadRegisteredAddresses();
+  if (registered[nick]) {
+    document.getElementById('gmOriginAddr').value = registered[nick];
+    document.getElementById('gmOriginName').value = nick;
+  }
+  sel.value = '';
+}
+
+function gmAddDest() {
+  var addr = document.getElementById('gmAddAddr').value.trim();
+  var name = document.getElementById('gmAddName').value.trim() || addr.substring(0, REG_NAME_MAX);
+  if (!addr) { alert('追加する行き先の住所・駅名を入力してください。'); return; }
+  if (addr.length > REG_ADDR_MAX || !isSafeRegKey(name)) {
+    alert('住所は' + REG_ADDR_MAX + '文字以内、表示名は1〜' + REG_NAME_MAX + '文字で入力してください。');
+    return;
+  }
+  var registered = loadRegisteredAddresses();
+  var dup = (name in registered) || gmExtraDests.some(function(d) { return d.name === name; });
+  if (dup) { alert('「' + name + '」は既に候補にあります。別の表示名を入力してください。'); return; }
+  gmExtraDests.push({ name: name, address: addr });
+  document.getElementById('gmAddAddr').value = '';
+  document.getElementById('gmAddName').value = '';
+  gmRefreshRegistered();
+}
+
+function gmShowWarnings(list) {
+  var w = document.getElementById('gmWarn');
+  if (!list || list.length === 0) { w.style.display = 'none'; w.textContent = ''; return; }
+  w.innerHTML = list.map(function(m) { return '⚠ ' + escapeHtml(m); }).join('<br>');
+  w.style.display = 'block';
+}
+
+// 変換結果の一覧表示（座標・変換先の地名・圏外警告・失敗時の扱い）
+function gmRenderGeoReport(report) {
+  var el = document.getElementById('gmGeoReport');
+  el.innerHTML = '';
+  if (!report || report.length === 0) { el.style.display = 'none'; return; }
+  var title = document.createElement('div');
+  title.className = 'gm-geo-title';
+  title.textContent = '座標への変換結果（QRに埋め込まれる位置）';
+  el.appendChild(title);
+  report.forEach(function(r) {
+    var row = document.createElement('div');
+    row.className = 'gm-geo-row';
+    var head = document.createElement('div');
+    head.className = 'gm-geo-head';
+    head.textContent = r.role + '：' + r.name + (r.address !== r.name ? '（' + r.address + '）' : '');
+    row.appendChild(head);
+    var body = document.createElement('div');
+    if (r.geo) {
+      var inArea = isInSapporoArea(r.geo.lat, r.geo.lon);
+      body.className = 'gm-geo-body' + (inArea ? '' : ' gm-geo-out');
+      body.textContent = (inArea ? '✓ ' : '⚠ 札幌圏外です。場所が正しくない可能性が高いです → ') +
+        '変換先: ' + (r.geo.name || '（名称不明）') +
+        ' ／ 座標 ' + Number(r.geo.lat).toFixed(6) + ', ' + Number(r.geo.lon).toFixed(6) +
+        (r.geo.source === 'nominatim' ? '（OpenStreetMapで変換）' : '（国土地理院で変換）');
+    } else {
+      body.className = 'gm-geo-body gm-geo-fail';
+      body.textContent = '✕ 変換できませんでした → ' + r.failNote;
+    }
+    row.appendChild(body);
+    el.appendChild(row);
+  });
+  el.style.display = 'block';
+}
+
+async function gmGenerate() {
+  var addr = document.getElementById('gmOriginAddr').value.trim();
+  var name = document.getElementById('gmOriginName').value.trim();
+  var registered = loadRegisteredAddresses();
+  var dests = [];  // [[表示名, 住所]] → 変換成功時は [表示名, 住所, lat, lon]
+  document.querySelectorAll('#gmDestList input[type="checkbox"]').forEach(function(cb) {
+    if (!cb.checked) return;
+    if (cb.value.indexOf('r:') === 0) {
+      var n = cb.value.substring(2);
+      if (registered[n]) dests.push([n, registered[n]]);
+    } else if (cb.value.indexOf('x:') === 0) {
+      var x = gmExtraDests[parseInt(cb.value.substring(2), 10)];
+      if (x) dests.push([x.name, x.address]);
+    }
+  });
+  document.getElementById('gmGeoReport').style.display = 'none';
+
+  var errors = [];
+  if (!addr) errors.push('出発地の住所・駅名を入力してください。');
+  if (addr.length > REG_ADDR_MAX) errors.push('出発地の住所は' + REG_ADDR_MAX + '文字以内にしてください。');
+  if (name.length > REG_NAME_MAX) errors.push('表示名は' + REG_NAME_MAX + '文字以内にしてください。');
+  if (dests.length === 0) errors.push('行き先の候補を1つ以上チェックしてください。');
+  if (dests.length > GDEST_MAX) errors.push('行き先は' + GDEST_MAX + '件までにしてください（現在 ' + dests.length + '件）。');
+  if (errors.length > 0) {
+    gmShowWarnings(errors);
+    showEl('gmOutput', false);
+    return;
+  }
+
+  var btn = document.getElementById('gmGenerateBtn');
+  btn.disabled = true;
+  var warnings = [];
+  var report = [];
+  var p = new URLSearchParams();
+  p.set('origin', addr);
+  if (name) p.set('originname', name);
+
+  try {
+    // 出発地・行き先とも作成時に座標へ変換して埋め込む（読み取り時の誤変換＝別の町に飛ぶ事故を防ぐ）
+    btn.textContent = '作成中...（出発地を変換中）';
+    var g = await gmGeocodeOne(addr);
+    if (g) {
+      p.set('olat', Number(g.lat).toFixed(6));
+      p.set('olon', Number(g.lon).toFixed(6));
+      report.push({ role: '出発地', name: name || addr, address: addr, geo: g, failNote: '' });
+    } else {
+      warnings.push('出発地を座標に変換できなかったため、住所のみでQRを作成しました（読み取り時に住所から検索します）。');
+      report.push({ role: '出発地', name: name || addr, address: addr, geo: null, failNote: '住所のみで含めました（読み取り時に住所から検索）' });
+    }
+    for (var i = 0; i < dests.length; i++) {
+      btn.textContent = '作成中...（行き先を変換中 ' + (i + 1) + '/' + dests.length + '）';
+      var dg = await gmGeocodeOne(dests[i][1]);
+      if (dg) {
+        dests[i] = [dests[i][0], dests[i][1], Number(Number(dg.lat).toFixed(6)), Number(Number(dg.lon).toFixed(6))];
+      }
+      report.push({
+        role: '行き先', name: dests[i][0], address: dests[i][1], geo: dg,
+        failNote: dg ? '' : '座標なしで含めました（読み取り時に住所から検索するため、別の場所になる可能性があります）'
+      });
+    }
+    gmRenderGeoReport(report);
+    if (report.some(function(r) { return r.geo && !isInSapporoArea(r.geo.lat, r.geo.lon); })) {
+      warnings.push('札幌圏外に変換された地点があります（下の一覧の赤字）。住所を「札幌市中央区…」のように市区町村から書き直して作り直してください。');
+    }
+    if (report.some(function(r) { return !r.geo && r.role === '行き先'; })) {
+      warnings.push('座標に変換できなかった行き先があります（下の一覧参照）。');
+    }
+
+    p.set('gdest', encodeB64Json(dests));
+    if (location.protocol === 'file:') {
+      warnings.push('このページはファイル（file://）として開かれています。このURLは他の端末では開けません。公開先（https://）でページを開いてからQRを作成してください。');
+    }
+    var url = getAppBaseUrl() + '?' + p.toString();
+    if (url.length > GUIDE_URL_WARN_LENGTH) {
+      warnings.push('URLが長くなっています（' + url.length + '文字）。QRが細かくなり読み取りにくくなるため、行き先の数を減らすことをおすすめします。');
+    }
+
+    document.getElementById('gmUrl').value = url;
+    document.getElementById('gmPreviewLink').href = url;
+    document.getElementById('gmPrintTitle').textContent = name || addr;
+    if (!renderQrInto(document.getElementById('gmQr'), url)) {
+      warnings.push('QRコードを生成できませんでした。URLのコピーをご利用ください。');
+    }
+    gmShowWarnings(warnings);
+    showEl('gmOutput', true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '案内用QRを作成';
+  }
+}
+
+function gmCopyUrl() {
+  var text = document.getElementById('gmUrl').value;
+  var done = function() {
+    showEl('gmCopyMsg', true);
+    setTimeout(function() { showEl('gmCopyMsg', false); }, 2000);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done, function() { window.prompt('URLをコピーしてください', text); });
+  } else {
+    window.prompt('URLをコピーしてください', text);
+  }
+}
+
+// 印刷: QR・表示名・案内文だけを印刷用領域に複製して出力
+function gmPrint() {
+  var sheet = document.getElementById('printSheet');
+  sheet.innerHTML = document.getElementById('guideQrPrint').innerHTML;
+  document.body.classList.add('print-guide-qr');
+  var cleanup = function() {
+    document.body.classList.remove('print-guide-qr');
+    sheet.innerHTML = '';
+    window.removeEventListener('afterprint', cleanup);
+  };
+  window.addEventListener('afterprint', cleanup);
+  window.print();
+}
+
+// ==========================================
+// 起動
+// ==========================================
+window.addEventListener('DOMContentLoaded', function() {
+  initFromUrl();
+  renderOrigin();
+  renderDestButtons();
+  updateDetailLink();
+  gmRefreshRegistered();
+  document.getElementById('originInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.isComposing) setManualOrigin();
+  });
+  document.getElementById('destInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.isComposing) setManualDest();
+  });
+});
+</script>
+</body>
+</html>
